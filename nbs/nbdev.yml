@@ -1,0 +1,9 @@
+project:
+  output-dir: _docs
+
+website:
+  title: "bigtabular"
+  site-url: "https://stefan027.github.io/bigtabular"
+  description: "Extension of fastai.tabular for larger-than-memory datasets with Dask"
+  repo-branch: main
+  repo-url: "https://github.com/stefan027/bigtabular"

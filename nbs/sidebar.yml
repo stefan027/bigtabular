@@ -1,0 +1,8 @@
+website:
+  sidebar:
+    contents:
+      - index.ipynb
+      - 00_core.ipynb
+      - 01_data.ipynb
+      - 02_learner.ipynb
+      - 03_tutorial.ipynb
