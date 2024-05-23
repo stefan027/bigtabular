@@ -42,7 +42,7 @@ pip install bigtabular
 
 ## How to use
 
-Refer to the [tutorial](nbs/tutorial.html) for a more detailed usage
+Refer to the [tutorial](nbs/03_tutorial.ipynb) for a more detailed usage
 example.
 
 Get a Dask DataFrame:
