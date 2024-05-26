@@ -249,20 +249,19 @@ class DaskCategorify(TabularProc):
     "Transform the categorical variables to something similar to `pd.Categorical`"
     order = 1
     def __init__(self, cat_vocabs:'dict | None'=None):
-        # self.classes = {}
-        # if cat_vocabs is not None:
-        #     self.classes = {n: DaskCategoryMap(vocab, sort=False, add_na=False) for n, vocab in cat_vocabs.items()}
         classes = {}
         if cat_vocabs is not None:
             classes = {n: DaskCategoryMap(vocab, sort=False, add_na=False) for n, vocab in cat_vocabs.items()}
         store_attr(classes=classes, but='to')
 
     def setups(self, to):
-        for n in to.cat_names:
-            if n not in self.classes:
-                self.classes[n] = DaskCategoryMap(getattr(to, 'train', to).iloc[:,n], add_na=(n in to.cat_names))
-        # store_attr(classes={n:DaskCategoryMap(to.iloc[:,n], add_na=(n in to.cat_names)) for n in to.cat_names}, but='to')
-        # self(to)
+        _cat_names = [n for n in to.cat_names if n not in self.classes]
+        # Convert numeric categorical columns to strings
+        _num_cats = list(to.items[_cat_names].select_dtypes(include=['number', 'bool']).columns)
+        to.items[_num_cats] = to.items[_num_cats].astype('category')
+        _cats = getattr(to, 'train', to).items[_cat_names].categorize()
+        for n in _cat_names:
+            self.classes[n] = DaskCategoryMap(_cats[n], add_na=(n in to.cat_names))
 
     def encodes(self, to): to.transform(list(self.classes.keys()), partial(_apply_cats, voc=self.classes, add=1))
     def decodes(self, to): to.transform(list(self.classes.keys()), partial(_decode_cats, voc=self.classes))
@@ -327,8 +326,10 @@ class DaskCategorize(DisplayedTransform):
 class DaskFillStrategy:
     "Namespace containing the various filling strategies."
     def median  (c,fill): return c.median_approximate().compute()
-    def constant(c,fill): return fill
-    def mode    (c,fill): return c.dropna().value_counts().idxmax().compute()
+    # def constant(c,fill): return fill
+    def constant(c,fill): return {n: fill[n] for n in c.columns}
+    # def mode    (c,fill): return c.dropna().value_counts().idxmax().compute()
+    def mode    (c,fill): return {n: c[n].dropna().value_counts().idxmax().compute() for n in c.columns}
 
 # %% ../nbs/00_core.ipynb 69
 class DaskFillMissing(TabularProc):
@@ -339,10 +340,11 @@ class DaskFillMissing(TabularProc):
 
     def setups(self, to):
         missing = to.conts.isnull().any().compute()
-        store_attr(but='to', na_dict={n:self.fill_strategy(to[n], self.fill_vals[n])
-                            for n in missing[missing].keys()})
+        missing_cols = list(missing[missing].keys())
+        # store_attr(but='to', na_dict={n:self.fill_strategy(to[n], self.fill_vals[n])
+        #                     for n in missing[missing].keys()})
+        store_attr(but='to', na_dict=dict(self.fill_strategy(to[missing_cols], self.fill_vals)))
         self.fill_strategy = self.fill_strategy.__name__
-        # return self(to)
 
     def encodes(self, to):
         missing = to.conts.isnull()
