@@ -9,8 +9,9 @@ import dask.dataframe as dd
 
 # %% auto 0
 __all__ = ['dask_make_date', 'dask_add_datepart', 'dask_add_elapsed_times', 'dask_cont_cat_split', 'get_random_train_mask',
-           'TabularDask', 'DaskCategoryMap', 'DaskCategorify', 'DaskNormalize', 'DaskCategorize', 'DaskFillStrategy',
-           'DaskFillMissing', 'DaskRegressionSetup', 'DaskCategoryBlock', 'DaskRegressionBlock', 'DaskDataLoader']
+           'RandomTrainMask', 'TabularDask', 'DaskCategoryMap', 'DaskCategorify', 'DaskNormalize', 'DaskCategorize',
+           'DaskFillStrategy', 'DaskFillMissing', 'DaskRegressionSetup', 'DaskCategoryBlock', 'DaskRegressionBlock',
+           'DaskDataLoader']
 
 # %% ../nbs/00_core.ipynb 7
 def dask_make_date(ddf, date_field):
@@ -45,10 +46,21 @@ def dask_cont_cat_split(df, max_card=20, dep_var=None):
     return cont_names, cat_names
 
 # %% ../nbs/00_core.ipynb 25
-def get_random_train_mask(df, train_frac=0.8):
-    return pd.Series(np.random.random(len(df)) < train_frac)
+def get_random_train_mask(df, train_frac=0.8, seed=None):
+    rng = np.random.default_rng(seed)
+    return pd.Series(rng.random(len(df)) < train_frac)
 
-# %% ../nbs/00_core.ipynb 28
+# %% ../nbs/00_core.ipynb 26
+class RandomTrainMask:
+    def __init__(self, train_frac=0.8, seed=None):
+        self.train_frac = train_frac
+        self.seed = int(datetime.now().timestamp()) if seed is None else seed
+
+    def __call__(self, df):
+        rng = np.random.default_rng(self.seed)
+        return pd.Series(rng.random(len(df)) < self.train_frac)
+
+# %% ../nbs/00_core.ipynb 29
 # TODO: align this function with the the tabular.core version
 class _TabIloc:
     "Get/set rows by iloc and cols by name"
@@ -61,7 +73,7 @@ class _TabIloc:
         else: rows,cols = idxs,slice(None)
         return df.iloc[rows, cols]
 
-# %% ../nbs/00_core.ipynb 29
+# %% ../nbs/00_core.ipynb 30
 class TabularDask(CollBase, GetAttr, IterableDataset):
     """
     A Dask `DataFrame` wrapper that knows which cols are cont/cat/y, and returns rows in `__iter__`.
@@ -73,21 +85,17 @@ class TabularDask(CollBase, GetAttr, IterableDataset):
         do_setup=True, device=None, reset_index=True
     ):
         self.items = ddf.copy()
-        # if "_int_train_mask" not in ddf.columns:
-        #     if train_mask_func is None:
-        #         train_mask_func = get_random_train_mask
-        #     self.items["_int_train_mask"] = ddf.map_partitions(
-        #         train_mask_func, meta=pd.Series(name="_int_train_mask", dtype="bool")
-        #     )
-        if "_int_train_mask" not in ddf.columns:
-            if train_mask_func is None:
-                self.items["_int_train_mask"] = True
-            else:
-                self.items["_int_train_mask"] = ddf.map_partitions(
-                    train_mask_func, meta=pd.Series(name="_int_train_mask", dtype="bool")
-                )
-        if reset_index: ddf = ddf.reset_index(drop=True)
-        # self._dl_type, self._dbunch_type = DaskDataLoader, DaskDataLoaders
+        if reset_index: self.items = self.items.reset_index(drop=True)
+
+        if do_setup:
+            if "_int_train_mask" not in self.items.columns:
+                if train_mask_func is None:
+                    self.items["_int_train_mask"] = True
+                else:
+                    self.items["_int_train_mask"] = self.items.map_partitions(
+                        train_mask_func, meta=pd.Series(name="_int_train_mask", dtype="bool")
+                    )
+
         self.y_names, self.device = L(y_names), device
 
         if y_block is None and self.y_names:
@@ -112,7 +120,7 @@ class TabularDask(CollBase, GetAttr, IterableDataset):
     def new(self, df):
         return type(self)(df, do_setup=False, y_block=TransformBlock(),
                           **attrdict(self, 'procs','cat_names','cont_names','y_names', 'device'))
-        
+
     def subset(self, i):
         train = self.items['_int_train_mask']
         return self.new(self.items[train if i==0 else ~train])
@@ -127,7 +135,7 @@ class TabularDask(CollBase, GetAttr, IterableDataset):
 
     def show(self, max_n=10, **kwargs):
         display_df(
-            self.new(self.all_cols).decode().items.head(max_n).drop(columns="_int_train_mask")
+            self.new(self.all_cols).decode().items.head(max_n)#.drop(columns="_int_train_mask")
         )
 
     def setup(self): self.procs.setup(self)
@@ -153,7 +161,6 @@ class TabularDask(CollBase, GetAttr, IterableDataset):
         cat_stop = len(self.cat_names)
         con_stop = cat_stop + len(self.cont_names)
         for i in range(self.items.npartitions):
-            # df = self.items.get_partition(i).compute()[self.cat_names + self.cont_names + self.y_names]
             df = self.items.get_partition(i).compute()[self.all_col_names]
             ys = [n for n in self.y_names if n in self.items.columns]
             for row in df.itertuples(index=False):
@@ -203,7 +210,7 @@ class TabularDask(CollBase, GetAttr, IterableDataset):
 
 properties(TabularDask,'iloc','targ','all_col_names','n_subsets','x_names','y', 'n_inp')
 
-# %% ../nbs/00_core.ipynb 31
+# %% ../nbs/00_core.ipynb 32
 def _add_prop(cls, nm):
     @property
     def f(o): return o[list(getattr(o,nm+'_names'))]
@@ -218,10 +225,10 @@ _add_prop(TabularDask, 'y')
 _add_prop(TabularDask, 'x')
 _add_prop(TabularDask, 'all_col')
 
-# %% ../nbs/00_core.ipynb 32
+# %% ../nbs/00_core.ipynb 33
 TabularDask.train, TabularDask.valid = add_props(lambda i,x: x.subset(i))
 
-# %% ../nbs/00_core.ipynb 38
+# %% ../nbs/00_core.ipynb 39
 class DaskCategoryMap(CategoryMap):
     "Dask implementation of CategoryMap. Collection of categories with the reverse mapping in `o2i`"
     def __init__(self, col, sort=True, add_na=False, strict=False):
@@ -244,7 +251,7 @@ class DaskCategoryMap(CategoryMap):
         self.items = '#na#' + items if add_na else items
         self.o2i = defaultdict(int, self.items.val2idx()) if add_na else dict(self.items.val2idx())
 
-# %% ../nbs/00_core.ipynb 43
+# %% ../nbs/00_core.ipynb 44
 class DaskCategorify(TabularProc):
     "Transform the categorical variables to something similar to `pd.Categorical`"
     order = 1
@@ -267,14 +274,14 @@ class DaskCategorify(TabularProc):
     def decodes(self, to): to.transform(list(self.classes.keys()), partial(_decode_cats, voc=self.classes))
     def __getitem__(self,k): return self.classes[k]
 
-# %% ../nbs/00_core.ipynb 48
+# %% ../nbs/00_core.ipynb 49
 def _apply_cats (c, voc, add):
     if not (hasattr(c, 'dtype') and isinstance(c.dtype, CategoricalDtype)):
         return pd.Categorical(c, categories=voc[c.name][add:]).codes+add
     return c.cat.codes+add #if is_categorical_dtype(c) else c.map(voc[c.name].o2i)
 def _decode_cats(c, voc): return c.map(dict(enumerate(voc[c.name].items)))
 
-# %% ../nbs/00_core.ipynb 65
+# %% ../nbs/00_core.ipynb 66
 class DaskNormalize(TabularProc):
     parameters,order = L('mean', 'std'),99
     def __init__(self, cols=None):
@@ -298,7 +305,7 @@ class DaskNormalize(TabularProc):
         to.items[self.cols] = to.items[self.cols].map_partitions(lambda df: (df*self.stds) + self.means)
         return to
 
-# %% ../nbs/00_core.ipynb 66
+# %% ../nbs/00_core.ipynb 67
 class DaskCategorize(DisplayedTransform):
     loss_func,order=CrossEntropyLossFlat(),1
     def __init__(self, vocab=None, sort=True, add_na=False):
@@ -322,7 +329,7 @@ class DaskCategorize(DisplayedTransform):
         to.transform(to.y_names, partial(_decode_cats, voc={n: self.vocab for n in to.y_names}), all_col=False)
         return to
 
-# %% ../nbs/00_core.ipynb 67
+# %% ../nbs/00_core.ipynb 68
 class DaskFillStrategy:
     "Namespace containing the various filling strategies."
     def median  (c,fill): return c.median_approximate().compute()
@@ -331,7 +338,7 @@ class DaskFillStrategy:
     # def mode    (c,fill): return c.dropna().value_counts().idxmax().compute()
     def mode    (c,fill): return {n: c[n].dropna().value_counts().idxmax().compute() for n in c.columns}
 
-# %% ../nbs/00_core.ipynb 69
+# %% ../nbs/00_core.ipynb 70
 class DaskFillMissing(TabularProc):
     "Fill the missing values in continuous columns."
     def __init__(self, fill_strategy=DaskFillStrategy.median, add_col=True, fill_vals=None):
@@ -358,7 +365,7 @@ class DaskFillMissing(TabularProc):
                     to.items[n+'_na'] = missing[n]
                     if n+'_na' not in to.cat_names: to.cat_names.append(n+'_na')
 
-# %% ../nbs/00_core.ipynb 71
+# %% ../nbs/00_core.ipynb 72
 class DaskRegressionSetup(DisplayedTransform):
     "A Dask-compatible transform that floatifies targets"
     loss_func=MSELossFlat()
@@ -375,7 +382,7 @@ class DaskRegressionSetup(DisplayedTransform):
         return to
     def decodes(self, to): return to
 
-# %% ../nbs/00_core.ipynb 73
+# %% ../nbs/00_core.ipynb 74
 def DaskCategoryBlock(
     vocab:MutableSequence|pd.Series=None, # List of unique class names
     sort:bool=True, # Sort the classes alphabetically
@@ -384,14 +391,14 @@ def DaskCategoryBlock(
     "A Dask-compatible `TransformBlock` for single-label categorical targets"
     return TransformBlock(type_tfms=DaskCategorize(vocab=vocab, sort=sort, add_na=add_na))
 
-# %% ../nbs/00_core.ipynb 74
+# %% ../nbs/00_core.ipynb 75
 def DaskRegressionBlock(
     n_out:int=None, # Number of output values
 ):
     "A Dask-compatible `TransformBlock` for float targets"
     return TransformBlock(type_tfms=DaskRegressionSetup(c=n_out))
 
-# %% ../nbs/00_core.ipynb 91
+# %% ../nbs/00_core.ipynb 92
 class DaskDataLoader(DataLoader):
     "Iterable dataloader for tabular learning with Dask"
     # TODO: align with TabDataLoader + ReadTabBatch (fastai.tabular.core)?
@@ -405,7 +412,7 @@ class DaskDataLoader(DataLoader):
 
     def decode(self, b):
         tmp = self.dataset.new(dd.from_pandas(b))
-        return tmp.decode().items.compute().drop(columns="_int_train_mask")
+        return tmp.decode().items.compute()#.drop(columns="_int_train_mask")
 
     def show_batch(self,
         b=None, # Batch to show
@@ -441,7 +448,7 @@ class DaskDataLoader(DataLoader):
 TabularDask._dl_type = DaskDataLoader
 TabularDask._dbunch_type = DataLoaders
 
-# %% ../nbs/00_core.ipynb 110
+# %% ../nbs/00_core.ipynb 111
 @EncodedMultiCategorize
 def setups(self, to:Tabular):
     self.c = len(self.vocab)

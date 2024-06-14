@@ -29,7 +29,7 @@ class DaskDataLoaders(DataLoaders):
         "Create `TabularDataLoaders` from `df` in `path` using `procs`"
         if cat_names is None: cat_names = []
         if cont_names is None: cont_names = list(set(df)-set(L(cat_names))-set(L(y_names)))
-        train_mask_func = get_random_train_mask if train_mask_func is None else train_mask_func
+        train_mask_func = RandomTrainMask() if train_mask_func is None else train_mask_func
         to = TabularDask(ddf, procs, cat_names, cont_names, y_names, train_mask_func=train_mask_func, y_block=y_block)
         return to.dataloaders(path=path, **kwargs)
 
