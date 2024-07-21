@@ -146,7 +146,8 @@ class TabularDask(CollBase, GetAttr, IterableDataset):
     def x_names (self): return self.cat_names + self.cont_names
     def n_subsets(self): return 2
     def y(self): return self[self.y_names[0]]
-    def new_empty(self): raise NotImplementedError
+    # def new_empty(self): raise NotImplementedError
+    def new_empty(self): return self.new(dd.from_pandas(pd.DataFrame({}, columns=self.items.columns)))
     def to_device(self, d=None):
         self.device = d
         return self
